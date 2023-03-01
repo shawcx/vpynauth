@@ -1,3 +1,5 @@
+*Pivoted to a WireGuard solution for my needs but leaving this here as a starting point for others.*
+
 # vpynauth
 OpenVPN Auth Plugin that calls a Python script
 
