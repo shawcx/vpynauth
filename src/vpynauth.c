@@ -7,6 +7,7 @@
 #define STR(x) _STR(x)
 
 #include <Python.h>
+#include <osdefs.h>
 
 #include <openvpn/openvpn-plugin.h>
 
@@ -28,7 +29,7 @@ int openvpn_plugin_open_v3(const int structver, struct openvpn_plugin_args_open_
 
 // callback hooks
 
-    ovpn_log  = args->callbacks->plugin_log;
+    ovpn_log = args->callbacks->plugin_log;
 
 // allocate the handle
 
@@ -37,38 +38,48 @@ int openvpn_plugin_open_v3(const int structver, struct openvpn_plugin_args_open_
     ret->handle = handle;
     ret->type_mask = OPENVPN_PLUGIN_MASK(OPENVPN_PLUGIN_AUTH_USER_PASS_VERIFY);
 
-// get the directory for the script and the import name
-
-    const char *base_dir = args->argv[1];
-    if (NULL == base_dir) {
-        return OPENVPN_PLUGIN_FUNC_ERROR;
-    }
-
-    const char *script = args->argv[2];
-    if (NULL == script) {
-        script = "vpynauth";
-    }
-
 // initialize python
 
-    //PyImport_AppendInittab("vpynauth", &PyInit_vpynauth);
-
+    // hack for some imports, e.g. crypt, to work correctly
     dlopen("libpython" STR(PY_MAJOR_VERSION) "." STR(PY_MINOR_VERSION) ".so", RTLD_LAZY | RTLD_GLOBAL);
 
     if(!Py_IsInitialized()) {
         Py_InitializeEx(0);
     }
 
-// inject the script directory in the python path
+// get the directory for the script and the import name
 
-    PyObject *sys_path = PySys_GetObject("path");
-    if (NULL == sys_path) {
-        return OPENVPN_PLUGIN_FUNC_ERROR;
+    const char *script = args->argv[2];
+
+    char *path_split = strrchr(args->argv[1], SEP);
+    if (path_split) {
+        // inject the script directory in the python path
+
+        char *base_dir = strndup(args->argv[1], path_split - args->argv[1]);
+
+        printf("##### %s\n", base_dir);
+
+        PyObject *sys_path = PySys_GetObject("path");
+        if (NULL == sys_path) {
+            ovpn_log(PLOG_ERR, PLUGIN_NAME, "ERROR: sys.path undefined");
+            return OPENVPN_PLUGIN_FUNC_ERROR;
+        }
+
+        PyObject *py_base_dir = PyUnicode_DecodeFSDefault(base_dir);
+        PyList_Append(sys_path, py_base_dir);
+        Py_DECREF(py_base_dir);
+
+        free(base_dir);
+
+    }
+    else {
+
+    }
+    
+    if (NULL == script) {
+        script = "vpynauth";
     }
 
-    PyObject *py_base_dir = PyUnicode_DecodeFSDefault(base_dir);
-    PyList_Append(sys_path, py_base_dir);
-    Py_DECREF(py_base_dir);
 
 // import the script
 
@@ -83,20 +94,20 @@ int openvpn_plugin_open_v3(const int structver, struct openvpn_plugin_args_open_
 
     if (NULL == handle->module) {
         PyErr_Print();
-        ovpn_log(PLOG_ERR, PLUGIN_NAME, "ERROR: Could not import: %s %s", base_dir, script);
+        ovpn_log(PLOG_ERR, PLUGIN_NAME, "ERROR: Could not import: %s", script);
         return OPENVPN_PLUGIN_FUNC_ERROR;
     }
 
     PyObject *Verify = PyObject_GetAttrString(handle->module, "Verify");
     if (NULL == Verify) {
-        ovpn_log(PLOG_ERR, PLUGIN_NAME, "ERROR: Missing 'Verify' class: %s %s", base_dir, script);
+        ovpn_log(PLOG_ERR, PLUGIN_NAME, "ERROR: Missing 'Verify' class: %s", script);
         return OPENVPN_PLUGIN_FUNC_ERROR;
     }
 
     handle->verify = PyObject_CallObject(Verify, NULL);
 
     if (NULL == handle->verify) {
-        ovpn_log(PLOG_ERR, PLUGIN_NAME, "ERROR: Coudl not instantiate 'Verify' class: %s %s", base_dir, script);
+        ovpn_log(PLOG_ERR, PLUGIN_NAME, "ERROR: Coudl not instantiate 'Verify' class: %s", script);
         return OPENVPN_PLUGIN_FUNC_ERROR;
     }
 
