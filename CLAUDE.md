@@ -50,17 +50,16 @@ defaults to `vpynauth`.
 
 ### The Python contract
 
-The module must define `class Verify` with `auth(self, vars) -> int`. Anything it prints goes
-to OpenVPN's stdout/log.
+README.md documents the contract for users. When you change `func_v1`, update the README
+to match.
 
 ## sample/
 
-`sample/` holds a reference implementation (`vpyn.py`), a helper that appends crypt hashes to
-the `users` file (`adduser`), and a `users` file in `username,crypt_hash` format.
-
-`vpyn.py` also requires the client cert's `common_name` to equal the username.
-
-Gotchas:
-- It opens `users` relative to the **process CWD** (OpenVPN's working directory), not the
-  script directory.
-- It uses the stdlib `crypt` module, which was removed in Python 3.13.
+- `vpyn.py` is the reference module. It reads `users` from its own directory, not from
+  OpenVPN's working directory. It also requires the client cert's `common_name` to equal the
+  username.
+- Each line of `users` is `username,scrypt$n$r$p$salt_hex$key_hex`. The `test` user's
+  password is `test`.
+- `adduser <name>` imports `hash_password` and `load_users` from `vpyn.py`, so the hash format
+  is defined only in `vpyn.py`. Running `adduser` leaves a `sample/__pycache__/` behind; it's
+  gitignored.
