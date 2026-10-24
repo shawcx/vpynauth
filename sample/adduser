@@ -3,12 +3,15 @@
 # simple script to generate a password, only supports adding new users
 
 import sys
-import os
-import crypt
 import getpass
 
-users = open('users', 'r').readlines()
-users = dict(user.strip().split(',',1) for user in users)
+from vpyn import USERS, hash_password, load_users
+
+if len(sys.argv) != 2:
+	print(f'Usage: {sys.argv[0]} <username>')
+	sys.exit(1)
+
+users = load_users()
 
 user = sys.argv[1]
 
@@ -21,9 +24,9 @@ pass2 = getpass.getpass('Verify: ')
 
 if pass1 != pass2:
 	print(f'Passwords do not match')
-	sys.exit(0)
+	sys.exit(1)
 
-password = crypt.crypt(pass1)
+password = hash_password(pass1.encode('utf-8', 'surrogateescape'))
 
-fp = open('users', 'a')
-fp.write(f'{user},{password}\n')
+with open(USERS, 'a') as fp:
+	fp.write(f'{user},{password}\n')
