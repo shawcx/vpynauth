@@ -17,6 +17,18 @@ Needs the Python headers and OpenVPN's plugin header:
 The plugin links against the Python that `python3-config` reports, so rebuild with
 `make distclean && make` after a Python upgrade.
 
+## Testing
+
+    make test
+
+This starts a real OpenVPN server with the plugin and the sample module, then logs in with
+real OpenVPN clients. It tries good and bad credentials, then reloads the server with
+`SIGHUP`.
+
+It runs without root, inside an unprivileged user and network namespace. It needs
+`openvpn`, `openssl`, unprivileged user namespaces and `/dev/net/tun`. Set `KEEP=1` to
+keep the logs.
+
 ## Usage
 
 In the OpenVPN server config:
@@ -46,6 +58,9 @@ class Verify:
 - `auth` runs synchronously and blocks OpenVPN until it returns, so keep it fast.
 - `print` output goes to OpenVPN's stdout. Pass `flush=True` so lines aren't held in a
   buffer.
+- Reloading OpenVPN (`SIGHUP`) re-imports the module and creates a new `Verify`, so script
+  edits take effect without a restart. The sample also re-reads `users` then. Python
+  itself keeps running, so modules the script imports aren't reloaded.
 
 ## Sample
 

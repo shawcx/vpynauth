@@ -16,6 +16,10 @@ $(OUT): $(OBJS)
 src/%.o: src/%.c
 	$(CC) -c $(CFLAGS) -fPIC $< -o $@
 
+.PHONY: test
+test: $(OUT)
+	@test/run.sh
+
 clean:
 	@rm -f $(OBJS)
 

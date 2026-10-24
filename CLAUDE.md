@@ -22,7 +22,12 @@ make distclean  # also removes vpynauth.so
 - Compiler and linker flags come from `python3-config --cflags` / `--embed --libs`, so the
   `.so` is tied to the Python version present at build time. After a Python upgrade, run
   `make distclean && make`, because a plain `make` won't notice the change.
-- There are no tests and no linter.
+- `make test` runs `test/run.sh`, an end-to-end test that needs no root. It starts a real
+  OpenVPN server with the plugin and `sample/vpyn.py`, then connects real clients. Everything
+  runs inside `unshare --map-root-user --net`, with a throwaway PKI in a temp directory.
+  - Set `KEEP=1` to keep the logs.
+  - It needs `openvpn`, `openssl`, unprivileged user namespaces and `/dev/net/tun`.
+  - There is no linter and there are no unit tests.
 
 ## Usage
 
@@ -46,7 +51,14 @@ defaults to `vpynauth`.
   - Only an exact `int` `0` or `True` accepts.
   - Anything else rejects: `False`, `None`, other ints, or a raised exception, which is
     printed with `PyErr_Print`.
-- **`openvpn_plugin_close_v1`** releases the module and the instance, then finalizes Python.
+- **`openvpn_plugin_close_v1`** releases the instance and removes the module from
+  `sys.modules`. It deliberately does **not** call `Py_FinalizeEx`.
+  - On SIGHUP, OpenVPN closes and reopens its plugins.
+  - Restarting Python makes C extensions such as `_hashlib` segfault when they are imported
+    again.
+  - So Python, and the global `dlopen` of libpython, live for the whole process, and a reload
+    re-imports the script.
+  - `test/run.sh` covers this case.
 
 ### The Python contract
 
