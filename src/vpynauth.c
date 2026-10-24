@@ -73,16 +73,21 @@ int openvpn_plugin_open_v3(const int structver, struct openvpn_plugin_args_open_
         return open_failed(handle);
     }
 
+// the handle is deliberately never closed: python outlives the plugin across SIGHUP
+// reloads (see openvpn_plugin_close_v1), so libpython must stay mapped
+
     if (NULL == dlopen(info.dli_fname, RTLD_LAZY | RTLD_GLOBAL | RTLD_NOLOAD)) {
         ovpn_log(PLOG_ERR, PLUGIN_NAME, "ERROR: Could not reload %s: %s", info.dli_fname, dlerror());
         return open_failed(handle);
     }
 
+// only the first open initializes python; a reload reuses the running interpreter
+
     if(!Py_IsInitialized()) {
         Py_InitializeEx(0);
     }
 
-// inject the script directory in the python path
+// inject the script directory in the python path, once across reloads
 
     PyObject *sys_path = PySys_GetObject("path");
     if (NULL == sys_path) {
@@ -91,7 +96,8 @@ int openvpn_plugin_open_v3(const int structver, struct openvpn_plugin_args_open_
     }
 
     PyObject *py_base_dir = PyUnicode_DecodeFSDefault(base_dir);
-    if (NULL == py_base_dir || 0 != PyList_Append(sys_path, py_base_dir)) {
+    int present = (NULL == py_base_dir) ? -1 : PySequence_Contains(sys_path, py_base_dir);
+    if (present < 0 || (0 == present && 0 != PyList_Append(sys_path, py_base_dir))) {
         PyErr_Print();
         Py_XDECREF(py_base_dir);
         ovpn_log(PLOG_ERR, PLUGIN_NAME, "ERROR: Could not add to sys.path: %s", base_dir);
@@ -213,12 +219,18 @@ void openvpn_plugin_close_v1(openvpn_plugin_handle_t _handle) {
         return;
     }
 
+// OpenVPN closes and reopens plugins on SIGHUP. Python is left running because C
+// extensions (e.g. _hashlib) crash when imported again after Py_FinalizeEx. Instead the
+// script is dropped from sys.modules, so the next open imports a fresh copy of it.
+
+    PyObject *name = PyModule_GetNameObject(handle->module);
+    if (NULL == name || 0 != PyDict_DelItem(PyImport_GetModuleDict(), name)) {
+        PyErr_Clear();
+    }
+    Py_XDECREF(name);
+
     Py_XDECREF(handle->verify);
     Py_XDECREF(handle->module);
-
-    if(Py_IsInitialized()) {
-        Py_FinalizeEx();
-    }
 
     free(handle);
 }
