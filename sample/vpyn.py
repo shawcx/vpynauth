@@ -11,8 +11,6 @@ class Verify:
         self.users = dict(user.strip().split(',',1) for user in users)
 
     def auth(self, vars):
-        vars = dict(v.split('=',1) for v in vars)
-
         username = vars.get('username')
         password = vars.get('password')
         cn       = vars.get('common_name')

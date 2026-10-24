@@ -1,10 +1,10 @@
+// for dladdr and RTLD_NOLOAD
+#define _GNU_SOURCE
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <dlfcn.h>
-
-#define _STR(x) #x
-#define STR(x) _STR(x)
 
 #include <Python.h>
 
@@ -53,7 +53,19 @@ int openvpn_plugin_open_v3(const int structver, struct openvpn_plugin_args_open_
 
     //PyImport_AppendInittab("vpynauth", &PyInit_vpynauth);
 
-    dlopen("libpython" STR(PY_MAJOR_VERSION) "." STR(PY_MINOR_VERSION) ".so", RTLD_LAZY | RTLD_GLOBAL);
+// promote the already loaded libpython to RTLD_GLOBAL so that python C extensions
+// can resolve its symbols; dladdr finds the exact file this plugin was linked against
+
+    Dl_info info;
+    if (0 == dladdr((void *)&Py_IsInitialized, &info) || NULL == info.dli_fname) {
+        ovpn_log(PLOG_ERR, PLUGIN_NAME, "ERROR: Could not locate libpython");
+        return OPENVPN_PLUGIN_FUNC_ERROR;
+    }
+
+    if (NULL == dlopen(info.dli_fname, RTLD_LAZY | RTLD_GLOBAL | RTLD_NOLOAD)) {
+        ovpn_log(PLOG_ERR, PLUGIN_NAME, "ERROR: Could not reload %s: %s", info.dli_fname, dlerror());
+        return OPENVPN_PLUGIN_FUNC_ERROR;
+    }
 
     if(!Py_IsInitialized()) {
         Py_InitializeEx(0);
@@ -89,6 +101,7 @@ int openvpn_plugin_open_v3(const int structver, struct openvpn_plugin_args_open_
 
     PyObject *Verify = PyObject_GetAttrString(handle->module, "Verify");
     if (NULL == Verify) {
+        PyErr_Print();
         ovpn_log(PLOG_ERR, PLUGIN_NAME, "ERROR: Missing 'Verify' class: %s %s", base_dir, script);
         return OPENVPN_PLUGIN_FUNC_ERROR;
     }
@@ -96,6 +109,7 @@ int openvpn_plugin_open_v3(const int structver, struct openvpn_plugin_args_open_
     handle->verify = PyObject_CallObject(Verify, NULL);
 
     if (NULL == handle->verify) {
+        PyErr_Print();
         ovpn_log(PLOG_ERR, PLUGIN_NAME, "ERROR: Coudl not instantiate 'Verify' class: %s %s", base_dir, script);
         return OPENVPN_PLUGIN_FUNC_ERROR;
     }
@@ -114,14 +128,38 @@ int openvpn_plugin_func_v1(openvpn_plugin_handle_t _handle, const int type, cons
         return OPENVPN_PLUGIN_FUNC_ERROR;
     }
 
-    PyObject *method = PyUnicode_FromString("auth");
+// convert envp to a dict; bytes that aren't valid UTF-8 (e.g. in a password)
+// become surrogate escapes instead of failing the decode
 
-    PyObject *vars = PyList_New(0);
-    for (int idx = 0; envp[idx]; ++idx) {
-        PyObject *var = PyUnicode_FromString(envp[idx]);
-        PyList_Append(vars, var);
-        Py_DECREF(var);
+    PyObject *vars = PyDict_New();
+    if (NULL == vars) {
+        PyErr_Print();
+        return OPENVPN_PLUGIN_FUNC_ERROR;
     }
+
+    for (int idx = 0; envp[idx]; ++idx) {
+        const char *eq = strchr(envp[idx], '=');
+        if (NULL == eq) {
+            continue;
+        }
+
+        PyObject *key = PyUnicode_DecodeUTF8(envp[idx], eq - envp[idx], "surrogateescape");
+        PyObject *val = PyUnicode_DecodeUTF8(eq + 1, strlen(eq + 1), "surrogateescape");
+
+        int err = (NULL == key || NULL == val) ? -1 : PyDict_SetItem(vars, key, val);
+
+        Py_XDECREF(key);
+        Py_XDECREF(val);
+
+        if (err < 0) {
+            PyErr_Print();
+            Py_DECREF(vars);
+            ovpn_log(PLOG_ERR, PLUGIN_NAME, "Could not convert environment");
+            return OPENVPN_PLUGIN_FUNC_ERROR;
+        }
+    }
+
+    PyObject *method = PyUnicode_FromString("auth");
 
     PyObject *retval = PyObject_CallMethodObjArgs(handle->verify, method, vars, NULL);
 
@@ -134,11 +172,18 @@ int openvpn_plugin_func_v1(openvpn_plugin_handle_t _handle, const int type, cons
         return OPENVPN_PLUGIN_FUNC_ERROR;
     }
 
-    long status = PyLong_AsLong(retval);
+// only an exact int 0 or True accepts; False (which == 0), None, other values
+// and overflowing ints all reject
+
+    int accept = (Py_True == retval) || (PyLong_CheckExact(retval) && 0 == PyLong_AsLong(retval));
+
+    if (PyErr_Occurred()) {
+        PyErr_Print();
+    }
 
     Py_DECREF(retval);
 
-    return status == 0 ? OPENVPN_PLUGIN_FUNC_SUCCESS : OPENVPN_PLUGIN_FUNC_ERROR;
+    return accept ? OPENVPN_PLUGIN_FUNC_SUCCESS : OPENVPN_PLUGIN_FUNC_ERROR;
 }
 
 
